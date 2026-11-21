@@ -1,0 +1,43 @@
+# Студент: Яровий Михайло, група КН-42
+# Локально:  docker compose up --build        (образ збирається з Dockerfile)
+# На EC2:    docker compose pull app && docker compose up -d --no-build   (образ із Docker Hub за IMAGE_TAG)
+services:
+  app:
+    build: .
+    image: ${DOCKERHUB_USERNAME:-local}/nodeapp:${IMAGE_TAG:-latest}
+    container_name: nodeapp
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: appdb
+      IMAGE_TAG: ${IMAGE_TAG:-local}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: appdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
