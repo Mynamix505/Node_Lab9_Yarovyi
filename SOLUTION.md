@@ -142,7 +142,24 @@ docker compose down                    # down -v видалить і том з �
 4. `docker/login-action@v3` виконує вхід за секретами `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`.
 5. `docker/build-push-action@v5` збирає й пушить `<user>/nodeapp:<SHORT_SHA>`, `<user>/nodeapp:main` та `<user>/nodeapp:latest` (з кешем шарів GitHub Actions).
 
-**Джоб `deploy`** (`needs: build-and-push`):
+**Джоб `deploy`** (`needs: build-and-push`): розгортає стек через `docker compose` на сервері GitHub Actions (Ubuntu). Образ застосунку тут **не збирається**, а завантажується з Docker Hub за тегом короткого хешу коміту, так само як на продакшн-сервері:
+
+```bash
+export DOCKERHUB_USERNAME IMAGE_TAG          # IMAGE_TAG = вихід image_tag першого джоба
+docker compose config --quiet
+docker rm -f nodeapp || true
+docker compose pull app                      # <user>/nodeapp:<SHORT_SHA> з Docker Hub
+docker compose up -d --no-build              # app + db (postgres:15)
+docker compose ps
+curl -fsS http://localhost:3000/             # перевіряється imageTag == SHORT_SHA і "db":"connected"
+curl -fsS http://localhost:3000/health
+docker compose logs app | grep "Connected to PostgreSQL database successfully!"
+docker compose down --volumes                # прибирання після перевірки
+```
+
+Якщо будь-яка перевірка не проходить, джоб падає, і в лог виводяться логи контейнерів.
+
+**Джоб `deploy-ec2`** (`needs: [build-and-push, deploy]`) — розгортання на Amazon EC2. Він вимкнений, доки немає сервера, і вмикається змінною репозиторію `EC2_DEPLOY = true` (Settings → Secrets and variables → Actions → **Variables**). Кроки:
 1. `appleboy/scp-action@v0.1.7` копіює актуальний `docker-compose.yml` у `~/nodeapp` на EC2.
 2. `appleboy/ssh-action@v1` виконує на сервері:
 
@@ -160,7 +177,9 @@ curl -fsS http://localhost:3000/health       # до 15 спроб; інакше 
 
 Так на EC2 завжди працює саме та версія образу, яка відповідає коміту. Відкат до попередньої версії: `IMAGE_TAG=<старий_хеш> docker compose up -d --no-build`.
 
-## 8. Підготовка EC2 (одноразово)
+## 8. Підготовка EC2 (одноразово, лише для джоба `deploy-ec2`)
+
+Цей розділ потрібен, лише якщо є доступ до AWS. Без нього пайплайн повністю працює через джоб `deploy` (розділ 7).
 
 **Security Group:** вхідні правила для SSH `22` та TCP `3000`. Порт `5432` назовні не відкривати: застосунок звертається до БД усередині мережі Compose.
 
@@ -225,13 +244,45 @@ docker inspect nodeapp --format '{{.Config.Image}}'   # <user>/nodeapp:<хеш �
 
 Значення `imageTag` має збігатися з хешем коміту на вкладці GitHub Actions і з тегом образу на Docker Hub.
 
-## 10. Що перевірено при підготовці
+## 10. Результати виконання
 
-- `npm run check` і `npm test` (8 тестів: `/`, `/health` 200/500, 404, retry-логіка, дефолти `DB_*`): усі пройшли (Node.js 24).
-- Запуск `node index.js` без БД: сервер відповідає на `/` з `db: "disconnected"`, `/health` → 500, у лозі видно повторні спроби підключення.
-- Синтаксис `docker-compose.yml` і `deploy.yml` перевірено YAML-парсером, `setup-ec2.sh` — командою `bash -n`.
-- Docker на машині підготовки не встановлено, тому `docker build` / `docker compose up` і деплой на EC2 потрібно виконати й зафіксувати скріншотами самостійно (розділи 4, 5, 9).
+**Репозиторій:** https://github.com/Mynamix505/Node_Lab9_Yarovyi
+**Образ у Docker Hub:** https://hub.docker.com/r/mynamix505/nodeapp/tags — теги `0697060`, `93e2db6` (хеші комітів), `main`, `latest`.
+
+Успішний запуск пайплайну: https://github.com/Mynamix505/Node_Lab9_Yarovyi/actions/runs/44944494179. Коміт `0697060`, обидва джоби (`build-and-push`, `deploy`) зелені.
+
+Фрагмент логу джоба `deploy` (стан контейнерів після `docker compose up -d --no-build`):
+
+```
+ Image mynamix505/nodeapp:0697060 Pulled
+ Image postgres:15 Pulled
+ Container postgres_db Healthy
+ Container nodeapp Started
+NAME          IMAGE                          SERVICE   STATUS                   PORTS
+nodeapp       mynamix505/nodeapp:0697060     app       Up                       0.0.0.0:3000->3000/tcp
+postgres_db   postgres:15                    db        Up 5 seconds (healthy)   0.0.0.0:5432->5432/tcp
+```
+
+Відповіді застосунку, отримані через `curl`:
+
+```
+== GET /
+{"message":"Node.js-застосунок у Docker працює!","lab":"Практичне заняття №9","author":"Яровий Михайло, група КН-42","imageTag":"0697060","db":"connected"}
+== GET /health
+{"status":"ok","db":"connected","time":"2026-11-21T20:07:50.194Z","pg_version":"PostgreSQL 15.20 (Debian 15.20-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit"}
+nodeapp  | Connected to PostgreSQL database successfully!
+== Running image: mynamix505/nodeapp:0697060
+```
+
+`imageTag` у відповіді (`0697060`) збігається з хешем коміту і тегом образу в Docker Hub. Отже, розгорнуто саме ту версію, яку зібрав пайплайн.
+
+Також перевірено:
+- `npm run check` і `npm test`: 8 тестів (`/`, `/health` 200/500, 404, retry-логіка, дефолти `DB_*`), усі пройшли (локально на Node.js 24 і в CI);
+- запуск `node index.js` без БД: `/` повертає `db: "disconnected"`, `/health` → 500, у лозі видно повторні спроби підключення;
+- синтаксис `setup-ec2.sh` перевірено командою `bash -n`.
+
+Джоб `deploy-ec2` не запускався, бо доступу до AWS немає. Скріншоти для звіту: сторінка запуску в Actions, вкладка Tags у Docker Hub, розгорнутий лог кроку **Verify app and PostgreSQL**.
 
 ## Висновки
 
-Створено Dockerfile на основі `node:lts`, у якому завдяки порядку інструкцій кешується шар залежностей. `.dockerignore` зменшує контекст збірки й не пропускає секрети в образ. Застосунок працює разом із PostgreSQL 15 у Docker Compose, а retry-логіка та healthcheck усувають гонку під час старту БД. CI/CD-пайплайн тестує код, публікує образ у Docker Hub із тегом короткого хешу коміту й розгортає саме цю версію на EC2 через `docker compose`. Тому кожна версія на сервері однозначно відповідає коміту в Git і може бути відкочена.
+Створено Dockerfile на основі `node:lts`, у якому завдяки порядку інструкцій кешується шар залежностей. `.dockerignore` зменшує контекст збірки й не пропускає секрети в образ. Застосунок працює разом із PostgreSQL 15 у Docker Compose, а retry-логіка та healthcheck усувають гонку під час старту БД. CI/CD-пайплайн тестує код, публікує образ у Docker Hub із тегом короткого хешу коміту й розгортає саме цю версію через `docker compose` з автоматичною перевіркою `/` та `/health` (для EC2 підготовлено окремий джоб). Тому кожна розгорнута версія однозначно відповідає коміту в Git і може бути відкочена.

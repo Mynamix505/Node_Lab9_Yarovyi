@@ -16,7 +16,7 @@ Express-застосунок із PostgreSQL. Він запускається у
 | `.dockerignore` | виключає `node_modules`, `.env`, `.git`, документацію тощо |
 | `docker-compose.yml` | `app` (`nodeapp`, `build` + `image:…:${IMAGE_TAG}`) та `db` (`postgres:15`, том `postgres_data`) |
 | `.env.example` | шаблон змінних `DOCKERHUB_USERNAME`, `IMAGE_TAG`, `DB_*` |
-| `.github/workflows/deploy.yml` | джоби `build-and-push` (тести → Docker Hub) і `deploy` (EC2, `docker compose`) |
+| `.github/workflows/deploy.yml` | джоби `build-and-push` (тести → Docker Hub), `deploy` (`docker compose` з образом з Docker Hub) і опційний `deploy-ec2` |
 | `scripts/setup-ec2.sh` | одноразова підготовка EC2: видалення pm2, встановлення Docker + Compose |
 
 ## Швидкий старт
@@ -41,8 +41,14 @@ docker run -d -p 3000:3000 -e IMAGE_TAG=$GIT_HASH <your-name>/nodeapp:$GIT_HASH
 
 ## CI/CD
 
-1. Додати в GitHub Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `EC2_HOST`, `EC2_USERNAME`, `EC2_SSH_KEY`.
-2. Один раз підготувати EC2 за допомогою `scripts/setup-ec2.sh`: він видаляє pm2 і встановлює Docker. Відкрити в Security Group порти 22 і 3000.
-3. `git push` у `main`. Пайплайн виконує тести, публікує `<user>/nodeapp:<hash>` і `:latest`, а потім запускає на EC2 `docker compose pull app && docker compose up -d`.
+При `git push` у `main` виконуються:
+1. **`build-and-push`** — тести, потім збірка й публікація `mynamix505/nodeapp:<хеш коміту>`, `:main` і `:latest` у Docker Hub.
+2. **`deploy`** — `docker compose pull app && docker compose up -d --no-build` (образ з Docker Hub за хешем), потім перевірка `/`, `/health` і рядка `Connected to PostgreSQL database successfully!`.
+3. **`deploy-ec2`** (вимкнено) — те саме на Amazon EC2 через SSH. Вмикається змінною `EC2_DEPLOY=true` після підготовки сервера скриптом `scripts/setup-ec2.sh`.
+
+Секрети: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`; для EC2 ще `EC2_HOST`, `EC2_USERNAME`, `EC2_SSH_KEY`.
+
+- Репозиторій: https://github.com/Mynamix505/Node_Lab9_Yarovyi
+- Образ: https://hub.docker.com/r/mynamix505/nodeapp/tags
 
 Деталі, команди перевірки та пояснення кожної інструкції — у [SOLUTION.md](SOLUTION.md).
