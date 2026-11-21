@@ -1,5 +1,5 @@
 # Студент: Яровий Михайло, група КН-42
-# CI/CD: тести -> збірка образу -> push у Docker Hub (тег = короткий хеш коміту) -> деплой на EC2 через docker compose
+# CI/CD: тести -> збірка образу -> push у Docker Hub (тег = короткий хеш коміту) -> deploy через docker compose (образ з Docker Hub) -> [опційно] EC2
 name: Build, push to Docker Hub and deploy to EC2
 
 on:
@@ -70,8 +70,57 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # Розгортання стеку через docker compose на сервері GitHub Actions:
+  # образ НЕ збирається, а завантажується з Docker Hub за тегом короткого хешу коміту
   deploy:
     needs: build-and-push
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull image from Docker Hub and start stack
+        run: |
+          docker compose config --quiet
+          docker rm -f nodeapp || true
+          docker compose pull app
+          docker compose up -d --no-build
+          docker compose ps
+
+      - name: Verify app and PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+          echo "== GET /";       curl -fsS http://localhost:3000/;       echo
+          echo "== GET /health"; curl -fsS http://localhost:3000/health; echo
+          curl -fsS http://localhost:3000/ | grep -q "\"imageTag\":\"$IMAGE_TAG\""
+          curl -fsS http://localhost:3000/ | grep -q '"db":"connected"'
+          docker compose logs app | grep "Connected to PostgreSQL database successfully!"
+          echo "== Running image: $(docker inspect nodeapp --format '{{.Config.Image}}')"
+
+      - name: Container logs
+        if: always()
+        run: docker compose logs --no-color
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down --volumes
+
+  # Розгортання на Amazon EC2. Вимкнено, доки немає сервера:
+  # увімкнути — Settings → Secrets and variables → Actions → Variables → EC2_DEPLOY = true
+  deploy-ec2:
+    needs: [build-and-push, deploy]
+    if: vars.EC2_DEPLOY == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
