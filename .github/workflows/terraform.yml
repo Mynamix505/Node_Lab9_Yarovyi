@@ -1,0 +1,28 @@
+# Студент: Яровий Михайло, група КН-42
+# Перевірка конфігурації Terraform без доступу до AWS: fmt, validate, test (мок-провайдер)
+name: Terraform check
+
+on:
+  push:
+    branches: [main]
+    paths: ["terraform/**", ".github/workflows/terraform.yml"]
+  pull_request:
+    paths: ["terraform/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - run: terraform test

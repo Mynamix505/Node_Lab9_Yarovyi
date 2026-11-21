@@ -6,3 +6,16 @@ node_modules/
 *.pem
 *.log
 dist/
+
+# Terraform
+.terraform/
+**/.terraform/
+terraform.tfstate
+terraform.tfstate.*
+terraform.tfstate.backup
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc

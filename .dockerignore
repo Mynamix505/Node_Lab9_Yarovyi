@@ -18,3 +18,6 @@ SOLUTION.md
 CLAUDE.md
 test
 scripts
+terraform
+*.tfvars
+SOLUTION_PR9.md
